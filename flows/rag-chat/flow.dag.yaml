@@ -1,0 +1,81 @@
+$schema: https://azuremlschemas.azureedge.net/promptflow/latest/Flow.schema.json
+environment:
+  python_requirements_txt: requirements.txt
+
+inputs:
+  query:
+    type: string
+    is_chat_input: true
+  chat_history:
+    type: list
+    default: []
+  app_id:
+    type: string
+  filter:
+    type: string
+
+outputs:
+  answer:
+    type: string
+    reference: ${generate_answer.output}
+    is_chat_output: true
+  citations:
+    type: list
+    reference: ${format_context.output.citations}
+
+nodes:
+  - name: query_rewrite
+    type: llm
+    source:
+      type: code
+      path: query_rewrite.jinja2
+    inputs:
+      query: ${inputs.query}
+      chat_history: ${inputs.chat_history}
+    connection: open_ai_connection
+    api: chat
+    provider: AzureOpenAI
+    module: promptflow.tools.aoai
+    deployment_name: gpt-4o
+
+  - name: search_documents
+    type: python
+    source:
+      type: code
+      path: search_documents.py
+    inputs:
+      query: ${query_rewrite.output}
+      filter: ${inputs.filter}
+
+  - name: lookup_config
+    type: python
+    source:
+      type: code
+      path: lookup_config.py
+    inputs:
+      app_id: ${inputs.app_id}
+
+  - name: format_context
+    type: python
+    source:
+      type: code
+      path: format_context.py
+    inputs:
+      search_results: ${search_documents.output}
+
+  - name: generate_answer
+    type: llm
+    source:
+      type: code
+      path: chat_with_context.jinja2
+    inputs:
+      system_prompt: ${lookup_config.output.system_prompt}
+      context: ${format_context.output.context}
+      query: ${inputs.query}
+      chat_history: ${inputs.chat_history}
+    connection: open_ai_connection
+    api: chat
+    provider: AzureOpenAI
+    module: promptflow.tools.aoai
+    deployment_name: gpt-4o
+    temperature: ${lookup_config.output.temperature}

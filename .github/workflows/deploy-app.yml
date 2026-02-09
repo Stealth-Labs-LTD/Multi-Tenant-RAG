@@ -1,0 +1,110 @@
+name: Deploy Application
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Container Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name $ACR_NAME
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg VITE_APP_ID=${{ vars.VITE_APP_ID }} \
+            -t $ACR_NAME.azurecr.io/rag-platform:${{ github.sha }} \
+            -t $ACR_NAME.azurecr.io/rag-platform:latest \
+            ./app
+
+      - name: Push Docker image
+        run: |
+          docker push $ACR_NAME.azurecr.io/rag-platform:${{ github.sha }}
+          docker push $ACR_NAME.azurecr.io/rag-platform:latest
+
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_NAME.azurecr.io/rag-platform:${{ github.sha }}
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_NAME.azurecr.io/rag-platform:${{ github.sha }}
+
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_NAME.azurecr.io/rag-platform:${{ github.sha }}

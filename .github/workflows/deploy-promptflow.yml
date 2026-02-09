@@ -1,0 +1,166 @@
+name: Deploy Prompt Flow
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flows/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  WORKSPACE_NAME: ${{ vars.WORKSPACE_NAME }}
+  ENDPOINT_NAME: ${{ vars.ENDPOINT_NAME }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy Prompt Flow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install ML extension
+        run: az extension add -n ml
+
+      - name: Register flow as model
+        run: |
+          az ml model create \
+            --name rag-chat-flow \
+            --path ./flows/rag-chat \
+            --type custom_model \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME
+
+      - name: Get model version
+        id: model
+        run: |
+          VERSION=$(az ml model show \
+            --name rag-chat-flow \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --query "version" -o tsv)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update endpoint
+        run: |
+          ENDPOINT_EXISTS=$(az ml online-endpoint show \
+            --name $ENDPOINT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --query "name" -o tsv 2>/dev/null || true)
+
+          if [ -z "$ENDPOINT_EXISTS" ]; then
+            az ml online-endpoint create \
+              --name $ENDPOINT_NAME \
+              --resource-group $RESOURCE_GROUP \
+              --workspace-name $WORKSPACE_NAME \
+              --auth-mode aad_token
+          fi
+
+      - name: Create deployment YAML
+        run: |
+          cat > /tmp/deployment.yaml <<EOF
+          \$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+          name: rag-chat-deployment
+          endpoint_name: $ENDPOINT_NAME
+          model: azureml:rag-chat-flow:${{ steps.model.outputs.version }}
+          instance_type: Standard_DS3_v2
+          instance_count: 1
+          EOF
+
+      - name: Deploy model
+        run: |
+          az ml online-deployment create \
+            --file /tmp/deployment.yaml \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --all-traffic
+
+      - name: Set traffic to 100%
+        run: |
+          az ml online-endpoint update \
+            --name $ENDPOINT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --traffic "rag-chat-deployment=100"
+
+  smoke-test:
+    name: Smoke Test
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install ML extension
+        run: az extension add -n ml
+
+      - name: Get scoring URI
+        id: endpoint
+        run: |
+          SCORING_URI=$(az ml online-endpoint show \
+            --name $ENDPOINT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --query "scoring_uri" -o tsv)
+          echo "scoring_uri=$SCORING_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Get access token
+        id: token
+        run: |
+          TOKEN=$(az ml online-endpoint get-credentials \
+            --name $ENDPOINT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --workspace-name $WORKSPACE_NAME \
+            --query "accessToken" -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Send test request
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${{ steps.endpoint.outputs.scoring_uri }}" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "What is the leave policy?",
+              "chat_history": [],
+              "app_id": "hr-chatbot",
+              "filter": "app_scope/any(s: search.in(s, '\''hr-chatbot'\''))"
+            }')
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response body: $BODY"
+
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "Smoke test failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          if echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'answer' in d"; then
+            echo "Smoke test passed: response contains 'answer' field"
+          else
+            echo "Smoke test failed: response missing 'answer' field"
+            exit 1
+          fi
