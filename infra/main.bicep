@@ -161,7 +161,41 @@ module apim 'modules/apim.bicep' = {
   }
 }
 
-// 10. AI Search Data-Plane (depends on ai-search, openai, storage) - last
+// 10. ACR (no deps beyond resource group)
+module acr 'modules/acr.bicep' = {
+  name: 'acr-deployment'
+  scope: rg
+  params: {
+    location: location
+    prefix: prefix
+    environment: environmentName
+    tags: allTags
+  }
+}
+
+// 11. Container Apps (depends on acr, identity, monitoring, openai, ai-search, cosmos, apim)
+module containerApps 'modules/container-apps.bicep' = {
+  name: 'container-apps-deployment'
+  scope: rg
+  params: {
+    location: location
+    prefix: prefix
+    environment: environmentName
+    tags: allTags
+    identityId: identity.outputs.identityId
+    identityClientId: identity.outputs.identityClientId
+    acrName: acr.outputs.acrName
+    acrLoginServer: acr.outputs.acrLoginServer
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    openaiEndpoint: openai.outputs.openaiEndpoint
+    searchEndpoint: aiSearch.outputs.searchEndpoint
+    cosmosEndpoint: cosmosDb.outputs.cosmosEndpoint
+    apimGatewayUrl: apim.outputs.apimGatewayUrl
+    openaiDeploymentName: openai.outputs.gpt4oDeploymentName
+  }
+}
+
+// 12. AI Search Data-Plane (depends on ai-search, openai, storage) - last
 module aiSearchDataplane 'modules/ai-search-dataplane.bicep' = {
   name: 'ai-search-dataplane-deployment'
   scope: rg

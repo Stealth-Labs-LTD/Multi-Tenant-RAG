@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import uuid
 
 from azure.cosmos.aio import CosmosClient
 from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
@@ -152,6 +154,124 @@ async def create_chat_session():
 async def delete_chat_session(session_id: str):
     await chat_history.delete_session(session_id)
     return jsonify({"status": "deleted"}), 200
+
+
+@app.route("/health", methods=["GET"])
+async def health():
+    return jsonify({"status": "ok"})
+
+
+# Model name → app_scope mapping for tenant-aware routing.
+# When a UI sends model="hr-assistant", the backend resolves it to app_scope="hr-chatbot".
+# Falls back to APIM-injected context.app_id for the generic "rag-platform" model.
+MODEL_TENANT_MAP = {
+    "hr-assistant": "hr-chatbot",
+    "legal-assistant": "legal-chatbot",
+    "exec-briefing": "exec-chatbot",
+}
+
+
+@app.route("/v1/models", methods=["GET"])
+async def list_models():
+    models = [
+        {
+            "id": model_id,
+            "object": "model",
+            "created": 1700000000,
+            "owned_by": "rag-platform",
+        }
+        for model_id in MODEL_TENANT_MAP
+    ]
+    return jsonify({"object": "list", "data": models})
+
+
+@app.route("/v1/chat/completions", methods=["POST"])
+async def openai_chat_completions():
+    body = await request.get_json()
+    messages = body.get("messages", [])
+    context = body.get("context", {})
+    model = body.get("model", "")
+    stream = body.get("stream", False)
+
+    # Resolve tenant: model name takes priority, then APIM-injected context
+    app_id = MODEL_TENANT_MAP.get(model) or context.get("app_id", "")
+
+    if not messages or not app_id:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": "messages are required and tenant must be resolvable from model name or context.app_id",
+                        "type": "invalid_request_error",
+                    }
+                }
+            ),
+            400,
+        )
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+
+    if stream:
+
+        async def sse_stream():
+            async for chunk in chat_approach.run_with_streaming(messages, app_id):
+                delta_content = chunk.get("delta", {}).get("content", "")
+                citations = chunk.get("citations")
+
+                sse_chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model or "rag-platform",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": delta_content}
+                            if delta_content
+                            else {},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+
+                if citations:
+                    sse_chunk["citations"] = citations
+                    sse_chunk["choices"][0]["finish_reason"] = "stop"
+
+                yield f"data: {json.dumps(sse_chunk)}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+        return Response(sse_stream(), mimetype="text/event-stream")
+
+    # Non-streaming: collect full response
+    full_content = ""
+    citations = None
+    async for chunk in chat_approach.run_with_streaming(messages, app_id):
+        delta_content = chunk.get("delta", {}).get("content", "")
+        full_content += delta_content
+        if chunk.get("citations"):
+            citations = chunk["citations"]
+
+    result = {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": "rag-platform",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": full_content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+    if citations:
+        result["citations"] = citations
+
+    return jsonify(result)
 
 
 @app.route("/")

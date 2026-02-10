@@ -144,6 +144,10 @@ echo ""
 upload_files "${DATA_DIR}/legal-chatbot" "legal-chatbot" "legal-chatbot"
 echo ""
 
+# Upload Executive chatbot documents
+upload_files "${DATA_DIR}/exec-chatbot" "exec-chatbot" "exec-chatbot"
+echo ""
+
 # Upload shared documents (accessible to all chatbots)
 upload_files "${DATA_DIR}/shared" "shared" "hr-chatbot,legal-chatbot,exec-chatbot"
 echo ""
