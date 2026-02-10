@@ -48,8 +48,23 @@ param cosmosEndpoint string
 @description('APIM gateway URL')
 param apimGatewayUrl string
 
+@description('APIM public IP address for backend ingress restriction')
+param apimPublicIp string
+
 @description('OpenAI chat deployment name')
 param openaiDeploymentName string
+
+@description('Azure subscription ID for admin portal APIM management')
+param subscriptionId string
+
+@description('Resource group name for admin portal APIM management')
+param resourceGroupName string
+
+@description('APIM resource name for admin portal management')
+param apimName string
+
+@description('Storage account name for document uploads')
+param storageAccountName string
 
 // Deterministic secrets from uniqueString (stable across redeploys, unique per env)
 var jwtSecret = uniqueString(resourceGroup().id, 'jwt-secret', environment)
@@ -106,6 +121,13 @@ resource ragApp 'Microsoft.App/containerApps@2024-03-01' = {
       ingress: {
         external: true
         targetPort: 8080
+        ipSecurityRestrictions: [
+          {
+            name: 'allow-apim'
+            ipAddressRange: '${apimPublicIp}/32'
+            action: 'Allow'
+          }
+        ]
       }
       registries: [
         {
@@ -270,6 +292,70 @@ resource librechat 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+// ============================================================================
+// Container App: admin-portal (Tenant Admin Portal)
+// ============================================================================
+
+resource adminPortal 'Microsoft.App/containerApps@2024-03-01' = {
+  name: 'admin-portal'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identityId}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerAppEnv.id
+    configuration: {
+      ingress: {
+        external: true
+        targetPort: 8080
+      }
+      registries: [
+        {
+          server: acrLoginServer
+          username: acr.listCredentials().username
+          passwordSecretRef: 'acr-password'
+        }
+      ]
+      secrets: [
+        {
+          name: 'acr-password'
+          value: acr.listCredentials().passwords[0].value
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'admin-portal'
+          image: '${acrLoginServer}/admin-portal:latest'
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+            { name: 'COSMOS_DATABASE', value: 'rag-platform' }
+            { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
+            { name: 'RESOURCE_GROUP', value: resourceGroupName }
+            { name: 'APIM_NAME', value: apimName }
+            { name: 'STORAGE_ACCOUNT_NAME', value: storageAccountName }
+            { name: 'AZURE_SEARCH_ENDPOINT', value: searchEndpoint }
+            { name: 'AZURE_CLIENT_ID', value: identityClientId }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+}
+
 @description('RAG app FQDN')
 output ragAppFqdn string = ragApp.properties.configuration.ingress.fqdn
 
@@ -278,3 +364,6 @@ output openWebuiFqdn string = openWebui.properties.configuration.ingress.fqdn
 
 @description('LibreChat FQDN')
 output librechatFqdn string = librechat.properties.configuration.ingress.fqdn
+
+@description('Admin Portal FQDN')
+output adminPortalFqdn string = adminPortal.properties.configuration.ingress.fqdn

@@ -43,6 +43,9 @@ param publisherEmail string
 @description('Tags to apply to resources')
 param tags object
 
+@description('Principal ID of the platform managed identity for RBAC')
+param identityPrincipalId string
+
 var skuName = environment == 'dev' ? 'Developer' : 'Standard'
 
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
@@ -62,6 +65,16 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   properties: {
     publisherName: publisherName
     publisherEmail: publisherEmail
+  }
+}
+
+resource apimContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(apim.id, identityPrincipalId, '312a565d-c81f-4fd8-895a-4e21e48d571c')
+  scope: apim
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '312a565d-c81f-4fd8-895a-4e21e48d571c')
+    principalId: identityPrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -412,3 +425,6 @@ output apimGatewayUrl string = apim.properties.gatewayUrl
 
 @description('APIM resource name')
 output apimName string = apim.name
+
+@description('APIM public IP address (used for Container App ingress restriction)')
+output apimPublicIp string = apim.properties.publicIPAddresses[0]

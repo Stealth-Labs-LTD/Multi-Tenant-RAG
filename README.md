@@ -12,7 +12,7 @@ Key components:
 - **Azure OpenAI** -- GPT-4o for chat and text-embedding-3-large for vectorization
 - **Cosmos DB** -- Stores chatbot configuration, chat history, and usage analytics
 - **Prompt Flow** -- RAG orchestration pipeline (query rewrite, search, context formatting, answer generation)
-- **Container Apps** -- Hosts the Python backend and React frontend
+- **Container Apps** -- Hosts the Python backend, React frontend, and Tenant Admin Portal
 - **API Management** -- Per-tenant subscription keys with server-side filter injection
 
 For detailed architecture diagrams and data flow descriptions, see [docs/architecture.md](docs/architecture.md).
@@ -138,15 +138,17 @@ Each chatbot is configured via a document in the `chatbot-config` container:
 
 ## Adding a New Chatbot
 
-See [docs/adding-a-chatbot.md](docs/adding-a-chatbot.md) for the complete step-by-step runbook.
+The **Tenant Admin Portal** automates tenant onboarding. See [docs/admin-portal.md](docs/admin-portal.md) for the full design.
 
-In summary:
+From the admin portal UI, you can create a tenant, configure it, upload documents, and trigger reindexing — all in one place. The portal handles APIM product/subscription/named value creation, Cosmos DB config, blob uploads with `app_scope` metadata, and policy XML updates automatically.
 
-1. Create an APIM product and subscription for the new tenant
-2. Add a chatbot config document to Cosmos DB
-3. Upload documents to blob storage with `app_scope` metadata
-4. Trigger the AI Search indexer
-5. Deploy the frontend with the new tenant's `VITE_APP_ID`
+For the manual CLI-based approach, see [docs/adding-a-chatbot.md](docs/adding-a-chatbot.md).
+
+### Admin Portal Documentation
+
+- [High-Level Design](docs/admin-portal.md) — Architecture, API routes, frontend views, file structure
+- [Azure Setup Details](docs/admin-portal-azure-setup.md) — How each Azure service is managed, RBAC requirements, policy XML mechanics
+- [Verification Guide](docs/admin-portal-verification.md) — Step-by-step instructions for checking the deployment and testing end-to-end
 
 ## CI/CD
 
@@ -180,6 +182,9 @@ Configure GitHub environments (`dev`, `staging`, `production`) with required rev
 multi_tenant_rag/
   .github/workflows/       # CI/CD pipelines
   app/
+    admin/                 # Tenant Admin Portal (Quart + vanilla JS)
+      services/            # Azure service integrations (APIM, Cosmos, Storage, Search)
+      static/              # SPA frontend (HTML/CSS/JS)
     backend/               # Python Quart API server
       approaches/          # RAG chat approach implementation
       chat_history/        # Cosmos DB chat history manager

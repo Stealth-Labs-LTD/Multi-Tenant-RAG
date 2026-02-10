@@ -152,6 +152,7 @@ module apim 'modules/apim.bicep' = {
     environment: environmentName
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.identityClientId
+    identityPrincipalId: identity.outputs.identityPrincipalId
     keyVaultUri: keyvault.outputs.keyVaultUri
     appInsightsInstrumentationKey: monitoring.outputs.appInsightsInstrumentationKey
     promptFlowEndpoint: aiFoundry.outputs.scoringUri
@@ -191,7 +192,12 @@ module containerApps 'modules/container-apps.bicep' = {
     searchEndpoint: aiSearch.outputs.searchEndpoint
     cosmosEndpoint: cosmosDb.outputs.cosmosEndpoint
     apimGatewayUrl: apim.outputs.apimGatewayUrl
+    apimPublicIp: apim.outputs.apimPublicIp
     openaiDeploymentName: openai.outputs.gpt4oDeploymentName
+    subscriptionId: subscription().subscriptionId
+    resourceGroupName: rg.name
+    apimName: apim.outputs.apimName
+    storageAccountName: storage.outputs.storageAccountName
   }
 }
 
