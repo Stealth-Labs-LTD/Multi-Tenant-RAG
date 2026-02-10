@@ -12,9 +12,9 @@ set -euo pipefail
 #
 # Optional environment variables:
 #   AZURE_SEARCH_ENDPOINT       - Azure AI Search endpoint URL
-#   AZURE_SEARCH_INDEX_NAME     - Search index name (default: rag-index)
+#   AZURE_SEARCH_INDEX_NAME     - Search index name (default: documents-index)
 #   COSMOS_ENDPOINT             - Cosmos DB endpoint URL
-#   COSMOS_DATABASE_NAME        - Cosmos DB database name (default: multi-tenant-rag)
+#   COSMOS_DATABASE_NAME        - Cosmos DB database name (default: rag-platform)
 ###############################################################################
 
 usage() {
@@ -28,9 +28,9 @@ Required arguments:
 
 Optional environment variables:
   AZURE_SEARCH_ENDPOINT       Azure AI Search endpoint URL
-  AZURE_SEARCH_INDEX_NAME     Search index name (default: rag-index)
+  AZURE_SEARCH_INDEX_NAME     Search index name (default: documents-index)
   COSMOS_ENDPOINT             Cosmos DB endpoint URL
-  COSMOS_DATABASE_NAME        Cosmos DB database name (default: multi-tenant-rag)
+  COSMOS_DATABASE_NAME        Cosmos DB database name (default: rag-platform)
 EOF
     exit 1
 }
@@ -64,8 +64,8 @@ if [[ -z "$RESOURCE_GROUP" || -z "$WORKSPACE_NAME" || -z "$ENDPOINT_NAME" ]]; th
 fi
 
 # Defaults for optional env vars
-AZURE_SEARCH_INDEX_NAME="${AZURE_SEARCH_INDEX_NAME:-rag-index}"
-COSMOS_DATABASE_NAME="${COSMOS_DATABASE_NAME:-multi-tenant-rag}"
+AZURE_SEARCH_INDEX_NAME="${AZURE_SEARCH_INDEX_NAME:-documents-index}"
+COSMOS_DATABASE_NAME="${COSMOS_DATABASE_NAME:-rag-platform}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLOW_PATH="${SCRIPT_DIR}/../flows/rag-chat"

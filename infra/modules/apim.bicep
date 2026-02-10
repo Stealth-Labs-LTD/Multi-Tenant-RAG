@@ -126,17 +126,15 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = 
             <allowed-headers><header>*</header></allowed-headers>
         </cors>
         <rate-limit calls="20" renewal-period="60" />
-        <set-variable name="appScope" value="@(context.Product.Name)" />
+        <set-variable name="appScope" value="@(context.Product.Id)" />
         <set-variable name="requestBody" value="@(context.Request.Body.As<JObject>())" />
         <set-body>@{
             var body = (JObject)context.Variables["requestBody"];
-            body["filter"] = $"search.in(app_scope, '{(string)context.Variables["appScope"]}')";
-            body["app_id"] = (string)context.Variables["appScope"];
+            var ctx = body["context"] as JObject ?? new JObject();
+            ctx["app_id"] = (string)context.Variables["appScope"];
+            body["context"] = ctx;
             return body.ToString();
         }</set-body>
-        <set-header name="Authorization" exists-action="override">
-            <value>@("Bearer " + context.Request.Headers.GetValueOrDefault("Authorization",""))</value>
-        </set-header>
         <set-backend-service base-url="{{prompt-flow-endpoint}}" />
     </inbound>
     <backend><base /></backend>

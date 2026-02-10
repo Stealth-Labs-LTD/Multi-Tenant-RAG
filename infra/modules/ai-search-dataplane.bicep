@@ -124,7 +124,8 @@ resource deploymentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
         ],
         "vectorSearch": {
           "algorithms": [{ "name": "default-hnsw", "kind": "hnsw", "hnswParameters": { "metric": "cosine", "m": 4, "efConstruction": 400, "efSearch": 500 } }],
-          "profiles": [{ "name": "default-vector-profile", "algorithm": "default-hnsw" }]
+          "vectorizers": [{ "name": "openai-vectorizer", "kind": "azureOpenAI", "azureOpenAIParameters": { "resourceUri": "'"${OPENAI_ENDPOINT}"'", "deploymentId": "'"${EMBEDDING_DEPLOYMENT}"'", "modelName": "text-embedding-3-large" } }],
+          "profiles": [{ "name": "default-vector-profile", "algorithm": "default-hnsw", "vectorizer": "openai-vectorizer" }]
         },
         "semantic": {
           "configurations": [{
