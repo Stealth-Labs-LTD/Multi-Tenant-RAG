@@ -19,6 +19,10 @@ env/
 # Node
 node_modules/
 npm-debug.log*
+package-lock.json
+
+# Build artifacts
+app/backend/static/
 
 # IDE
 .vscode/
