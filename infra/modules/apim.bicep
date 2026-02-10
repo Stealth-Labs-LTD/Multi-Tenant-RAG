@@ -36,11 +36,15 @@ param publisherName string
 @description('Publisher email for APIM')
 param publisherEmail string
 
+@description('Tags to apply to resources')
+param tags object
+
 var skuName = environment == 'dev' ? 'Developer' : 'Standard'
 
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: '${prefix}-apim'
   location: location
+  tags: tags
   sku: {
     name: skuName
     capacity: 1
@@ -116,7 +120,7 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = 
     value: '''<policies>
     <inbound>
         <base />
-        <cors allow-credentials="true">
+        <cors allow-credentials="false">
             <allowed-origins><origin>*</origin></allowed-origins>
             <allowed-methods><method>*</method></allowed-methods>
             <allowed-headers><header>*</header></allowed-headers>

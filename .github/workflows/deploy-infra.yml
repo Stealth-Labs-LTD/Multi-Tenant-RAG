@@ -37,7 +37,7 @@ jobs:
       - name: Validate deployment
         run: |
           az deployment sub validate \
-            --location australiaeast \
+            --location uksouth \
             --template-file infra/main.bicep \
             --parameters infra/parameters/dev.bicepparam
 
@@ -60,7 +60,7 @@ jobs:
       - name: Run what-if
         run: |
           az deployment sub what-if \
-            --location australiaeast \
+            --location uksouth \
             --template-file infra/main.bicep \
             --parameters infra/parameters/dev.bicepparam
 
@@ -84,7 +84,7 @@ jobs:
         run: |
           az deployment sub create \
             --name deploy-dev-${{ github.run_number }} \
-            --location australiaeast \
+            --location uksouth \
             --template-file infra/main.bicep \
             --parameters infra/parameters/dev.bicepparam
 
@@ -108,7 +108,7 @@ jobs:
         run: |
           az deployment sub create \
             --name deploy-staging-${{ github.run_number }} \
-            --location australiaeast \
+            --location uksouth \
             --template-file infra/main.bicep \
             --parameters infra/parameters/staging.bicepparam
 
@@ -132,6 +132,6 @@ jobs:
         run: |
           az deployment sub create \
             --name deploy-prod-${{ github.run_number }} \
-            --location australiaeast \
+            --location uksouth \
             --template-file infra/main.bicep \
             --parameters infra/parameters/prod.bicepparam

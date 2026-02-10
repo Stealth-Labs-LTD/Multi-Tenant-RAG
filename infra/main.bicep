@@ -20,13 +20,19 @@ param publisherEmail string
 @description('Tags to apply to all resources')
 param tags object = {}
 
-var prefix = 'rag-${environmentName}'
+var suffix = take(uniqueString(subscription().subscriptionId, 'multi-tenant-rag'), 5)
+var prefix = 'rag-${environmentName}-${suffix}'
+var allTags = union(tags, {
+  Environment: environmentName
+  Application: 'multi-tenant-rag'
+  Owner: 'Stealth Labs'
+})
 
 // Resource Group
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-${prefix}'
   location: location
-  tags: tags
+  tags: allTags
 }
 
 // 1. Identity (no deps)
@@ -36,6 +42,7 @@ module identity 'modules/identity.bicep' = {
   params: {
     location: location
     prefix: prefix
+    tags: allTags
   }
 }
 
@@ -46,6 +53,7 @@ module monitoring 'modules/monitoring.bicep' = {
   params: {
     location: location
     prefix: prefix
+    tags: allTags
   }
 }
 
@@ -57,6 +65,7 @@ module openai 'modules/openai.bicep' = {
     location: location
     prefix: prefix
     identityId: identity.outputs.identityId
+    tags: allTags
   }
 }
 
@@ -69,6 +78,7 @@ module storage 'modules/storage.bicep' = {
     prefix: prefix
     identityPrincipalId: identity.outputs.identityPrincipalId
     environment: environmentName
+    tags: allTags
   }
 }
 
@@ -80,6 +90,7 @@ module keyvault 'modules/keyvault.bicep' = {
     location: location
     prefix: prefix
     identityPrincipalId: identity.outputs.identityPrincipalId
+    tags: allTags
   }
 }
 
@@ -93,6 +104,7 @@ module aiSearch 'modules/ai-search.bicep' = {
     environment: environmentName
     identityPrincipalId: identity.outputs.identityPrincipalId
     storageAccountId: storage.outputs.storageAccountId
+    tags: allTags
   }
 }
 
@@ -105,6 +117,7 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
     prefix: prefix
     environment: environmentName
     identityPrincipalId: identity.outputs.identityPrincipalId
+    tags: allTags
   }
 }
 
@@ -121,10 +134,10 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
     openaiEndpoint: openai.outputs.openaiEndpoint
     searchName: aiSearch.outputs.searchName
     searchEndpoint: aiSearch.outputs.searchEndpoint
-    storageAccountId: storage.outputs.storageAccountId
     keyVaultUri: keyvault.outputs.keyVaultUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    tags: allTags
   }
 }
 
@@ -143,6 +156,7 @@ module apim 'modules/apim.bicep' = {
     promptFlowEndpoint: aiFoundry.outputs.scoringUri
     publisherName: publisherName
     publisherEmail: publisherEmail
+    tags: allTags
   }
 }
 
@@ -161,5 +175,6 @@ module aiSearchDataplane 'modules/ai-search-dataplane.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     documentsContainerName: storage.outputs.documentsContainerName
     identityId: identity.outputs.identityId
+    tags: allTags
   }
 }

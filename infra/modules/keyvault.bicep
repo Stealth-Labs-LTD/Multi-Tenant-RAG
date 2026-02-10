@@ -12,9 +12,13 @@ param prefix string
 @description('Principal ID of the platform managed identity')
 param identityPrincipalId string
 
+@description('Tags to apply to resources')
+param tags object
+
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: '${prefix}-kv'
   location: location
+  tags: tags
   properties: {
     sku: {
       family: 'A'

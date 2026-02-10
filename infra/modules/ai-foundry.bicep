@@ -28,9 +28,6 @@ param searchName string
 @description('Azure AI Search endpoint URL')
 param searchEndpoint string
 
-@description('Storage account resource ID')
-param storageAccountId string
-
 @description('Key Vault URI')
 param keyVaultUri string
 
@@ -42,13 +39,34 @@ param appInsightsConnectionString string
 #disable-next-line no-unused-params
 param logAnalyticsWorkspaceId string
 
+@description('Tags to apply to resources')
+param tags object
+
 // Extract Key Vault name from URI for resource ID construction
 var keyVaultName = split(replace(replace(keyVaultUri, 'https://', ''), '/', ''), '.')[0]
 var appInsightsName = '${prefix}-appi'
+var mlStorageName = replace('${prefix}mlstor', '-', '')
+
+// Separate plain storage account for AI Foundry (HNS not supported)
+resource mlStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: mlStorageName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+  }
+}
 
 resource hub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: '${prefix}-ai-hub'
   location: location
+  tags: tags
   kind: 'Hub'
   sku: {
     name: 'Basic'
@@ -62,7 +80,7 @@ resource hub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   }
   properties: {
     friendlyName: '${prefix} AI Foundry Hub'
-    storageAccount: storageAccountId
+    storageAccount: mlStorage.id
     keyVault: resourceId('Microsoft.KeyVault/vaults', keyVaultName)
     applicationInsights: resourceId('Microsoft.Insights/components', appInsightsName)
     publicNetworkAccess: 'Enabled'
@@ -72,6 +90,7 @@ resource hub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
 resource project 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: '${prefix}-ai-project'
   location: location
+  tags: tags
   kind: 'Project'
   sku: {
     name: 'Basic'
@@ -115,22 +134,8 @@ resource searchConnection 'Microsoft.MachineLearningServices/workspaces/connecti
   }
 }
 
-// Managed Online Endpoint on the project
-resource onlineEndpoint 'Microsoft.MachineLearningServices/workspaces/onlineEndpoints@2024-10-01' = {
-  parent: project
-  name: '${prefix}-endpoint'
-  location: location
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${identityId}': {}
-    }
-  }
-  properties: {
-    authMode: 'aad_token'
-    publicNetworkAccess: 'Enabled'
-  }
-}
+// NOTE: Managed online endpoint is created via scripts/deploy-promptflow.sh
+// Bicep cannot deploy a model into it, so it's better managed via az ml CLI.
 
 @description('AI Foundry Hub name')
 output hubName string = hub.name
@@ -138,8 +143,8 @@ output hubName string = hub.name
 @description('AI Foundry Project name')
 output projectName string = project.name
 
-@description('Online endpoint name')
-output endpointName string = onlineEndpoint.name
+@description('Endpoint name convention for use by deploy script')
+output endpointName string = '${prefix}-endpoint'
 
-@description('Online endpoint scoring URI')
-output scoringUri string = onlineEndpoint.properties.scoringUri
+@description('Scoring URI placeholder - set after Prompt Flow deployment')
+output scoringUri string = 'https://${prefix}-endpoint.uksouth.inference.ml.azure.com/score'

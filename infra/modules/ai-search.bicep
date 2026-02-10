@@ -19,9 +19,13 @@ param identityPrincipalId string
 @description('Resource ID of the storage account (for search service blob reader role)')
 param storageAccountId string
 
+@description('Tags to apply to resources')
+param tags object
+
 resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   name: '${prefix}-search'
   location: location
+  tags: tags
   sku: {
     name: environment == 'prod' ? 'standard' : 'basic'
   }

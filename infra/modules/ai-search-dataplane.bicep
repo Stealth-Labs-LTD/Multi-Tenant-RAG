@@ -35,6 +35,9 @@ param documentsContainerName string
 @description('Resource ID of the user-assigned managed identity for the deployment script')
 param identityId string
 
+@description('Tags to apply to resources')
+param tags object
+
 var searchApiVersion = '2024-07-01'
 var dataSourceName = 'documents-datasource'
 var skillsetName = 'documents-skillset'
@@ -44,6 +47,7 @@ var indexerName = 'documents-indexer'
 resource deploymentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: '${searchName}-dataplane-setup'
   location: location
+  tags: tags
   kind: 'AzureCLI'
   identity: {
     type: 'UserAssigned'

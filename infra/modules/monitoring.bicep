@@ -9,9 +9,13 @@ param location string
 @description('Naming prefix for resources')
 param prefix string
 
+@description('Tags to apply to resources')
+param tags object
+
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-log'
   location: location
+  tags: tags
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -23,6 +27,7 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: '${prefix}-appi'
   location: location
+  tags: tags
   kind: 'web'
   properties: {
     Application_Type: 'web'

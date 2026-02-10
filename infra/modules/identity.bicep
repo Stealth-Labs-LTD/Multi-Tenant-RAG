@@ -9,9 +9,13 @@ param location string
 @description('Naming prefix for resources')
 param prefix string
 
+@description('Tags to apply to resources')
+param tags object
+
 resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${prefix}-identity'
   location: location
+  tags: tags
 }
 
 @description('Resource ID of the managed identity')

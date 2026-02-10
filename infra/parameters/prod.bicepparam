@@ -1,7 +1,7 @@
 using '../main.bicep'
 
 param environmentName = 'prod'
-param location = 'australiaeast'
+param location = 'uksouth'
 param publisherName = 'Platform Team'
 param publisherEmail = 'platform@example.com'
 param tags = {

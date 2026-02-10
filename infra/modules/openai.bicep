@@ -12,6 +12,9 @@ param prefix string
 @description('Resource ID of the user-assigned managed identity')
 param identityId string
 
+@description('Tags to apply to resources')
+param tags object
+
 var models = [
   {
     name: 'gpt-4o'
@@ -32,6 +35,7 @@ var models = [
 resource openai 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: '${prefix}-openai'
   location: location
+  tags: tags
   kind: 'OpenAI'
   sku: {
     name: 'S0'

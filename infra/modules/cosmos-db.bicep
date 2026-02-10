@@ -16,12 +16,16 @@ param environment string
 @description('Principal ID of the platform managed identity')
 param identityPrincipalId string
 
+@description('Tags to apply to resources')
+param tags object
+
 var isProduction = environment == 'prod'
 var databaseName = 'rag-platform'
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
   name: '${prefix}-cosmos'
   location: location
+  tags: tags
   kind: 'GlobalDocumentDB'
   properties: {
     databaseAccountOfferType: 'Standard'

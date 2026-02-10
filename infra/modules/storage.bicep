@@ -16,12 +16,16 @@ param identityPrincipalId string
 @allowed(['dev', 'staging', 'prod'])
 param environment string
 
+@description('Tags to apply to resources')
+param tags object
+
 // Storage account names must be 3-24 chars, lowercase alphanumeric only
 var storageNameClean = replace('${prefix}stor', '-', '')
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameClean
   location: location
+  tags: tags
   sku: {
     name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS'
   }
