@@ -2,6 +2,8 @@
 
 This runbook walks through the complete process of adding a new tenant chatbot to the multi-tenant RAG platform.
 
+> **Prefer the Admin Portal?** The [Tenant Admin Portal](admin-portal.md) automates all of these steps from a browser UI. Use this manual approach only if you need CLI-level control or the admin portal is unavailable.
+
 **Estimated time:** 30-45 minutes
 
 ---
@@ -39,14 +41,14 @@ az apim product create \
   --state published
 ```
 
-### 1.2 Add the RAG API to the Product
+### 1.2 Add the RAG Platform API to the Product
 
 ```bash
 az apim product api add \
   --resource-group "$RESOURCE_GROUP" \
   --service-name "$APIM_NAME" \
   --product-id "$CHATBOT_ID" \
-  --api-id "rag-chat-api"
+  --api-id "rag-platform-api"
 ```
 
 ### 1.3 Create a Subscription
@@ -62,15 +64,33 @@ az apim subscription create \
 
 ### 1.4 Retrieve the Subscription Key
 
+The `az` CLI does not have a `list-secrets` subcommand for APIM subscriptions. Use the REST API instead:
+
 ```bash
-az apim subscription show \
-  --resource-group "$RESOURCE_GROUP" \
-  --service-name "$APIM_NAME" \
-  --subscription-id "${CHATBOT_ID}-sub" \
+SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+
+az rest --method POST \
+  --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/subscriptions/${CHATBOT_ID}-sub/listSecrets?api-version=2024-05-01" \
   --query "primaryKey" -o tsv
 ```
 
-Save this key -- you will need it for the frontend configuration.
+Save this key -- you will need it for client configuration.
+
+### 1.5 Create an APIM Named Value (for OpenAI-compatible API)
+
+If you want this tenant to work with OpenAI-compatible clients (Open WebUI, LibreChat), create a named value storing the subscription key:
+
+```bash
+SUBSCRIPTION_KEY="<key-from-step-1.4>"
+
+az rest --method PUT \
+  --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/namedValues/openai-key-${CHATBOT_ID}?api-version=2024-05-01" \
+  --body "{\"properties\": {\"displayName\": \"openai-key-${CHATBOT_ID}\", \"value\": \"${SUBSCRIPTION_KEY}\", \"secret\": true}}"
+```
+
+### 1.6 Update the OpenAI API Policy
+
+Add a `<when>` block to the `rag-openai-api` inbound policy so that the bearer token is mapped to this tenant. This step is complex -- see [admin-portal-azure-setup.md](admin-portal-azure-setup.md#policy-xml-update) for how the XML modification works. The admin portal automates this entirely.
 
 ---
 
@@ -206,11 +226,38 @@ az rest --method POST \
 
 ---
 
-## Step 5: Deploy Frontend with New APIM Key
+## Step 5: Connect a Chat Client
 
-Update the frontend environment to include the new chatbot's APIM subscription key.
+You can connect any OpenAI-compatible client to the new tenant using the subscription key from Step 1.
 
-### 5.1 Local Development
+### Option A: Open WebUI (recommended)
+
+Point Open WebUI at the APIM OpenAI-compatible endpoint with the subscription key as the bearer token:
+
+```bash
+docker run -d -p 8080:8080 \
+  -e OPENAI_API_BASE_URL=https://<your-apim>.azure-api.net/v1 \
+  -e OPENAI_API_KEY=<subscription-key-from-step-1> \
+  ghcr.io/open-webui/open-webui:main
+```
+
+The tenant's chatbot will appear as a model in the Open WebUI model selector.
+
+### Option B: LibreChat
+
+Configure a custom endpoint in `librechat.yaml`:
+
+```yaml
+endpoints:
+  custom:
+    - name: "Finance Assistant"
+      apiKey: "<subscription-key-from-step-1>"
+      baseURL: "https://<your-apim>.azure-api.net/v1"
+      models:
+        default: ["finance-chatbot"]
+```
+
+### Option C: Custom React Frontend
 
 Create or update the `.env` file in `app/frontend/`:
 
@@ -220,15 +267,20 @@ VITE_APIM_KEY=<subscription-key-from-step-1>
 VITE_APIM_ENDPOINT=https://<your-apim-name>.azure-api.net
 ```
 
-### 5.2 Production Deployment
-
-Update the Container Apps environment variables or rebuild the Docker image with the new `VITE_APP_ID` build argument:
+### Option D: curl / API Testing
 
 ```bash
-docker build \
-  --build-arg VITE_APP_ID=finance-chatbot \
-  -t myacr.azurecr.io/rag-platform:finance \
-  ./app
+# Via the subscription key API
+curl -X POST "https://<your-apim>.azure-api.net/api/chat" \
+  -H "Content-Type: application/json" \
+  -H "Ocp-Apim-Subscription-Key: <subscription-key>" \
+  -d '{"messages": [{"role": "user", "content": "What is the expense policy?"}]}'
+
+# Via the OpenAI-compatible API
+curl -X POST "https://<your-apim>.azure-api.net/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <subscription-key>" \
+  -d '{"model": "finance-chatbot", "messages": [{"role": "user", "content": "What is the expense policy?"}]}'
 ```
 
 ---
@@ -295,6 +347,7 @@ curl -s -X POST "https://<backend-url>/chat" \
 | Empty search results | app_scope metadata not set | Check blob metadata and re-trigger the indexer |
 | Wrong documents returned | Incorrect app_scope value | Verify the app_scope metadata matches the chatbot ID exactly |
 | APIM returns 401 | Invalid subscription key | Verify the subscription key and ensure the product is published |
+| APIM returns 401 on /v1 | Named value not created or policy not updated | Complete Steps 1.5 and 1.6 |
 | Indexer not picking up new docs | Indexer schedule | Manually trigger the indexer or wait for the next scheduled run (every 5 minutes) |
 
 ---
@@ -311,3 +364,5 @@ curl -s -X POST "https://<backend-url>/chat" \
 | Metadata key | `app_scope` |
 | Search index | `documents-index` |
 | Indexer name | `documents-indexer` |
+| Platform API (sub key) | `/api` via `rag-platform-api` |
+| OpenAI-compat API (bearer) | `/v1` via `rag-openai-api` |

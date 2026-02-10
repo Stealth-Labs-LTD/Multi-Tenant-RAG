@@ -11,9 +11,9 @@ Key components:
 - **Azure AI Search** -- Hybrid (keyword + vector) search with semantic ranking and per-tenant `app_scope` filtering
 - **Azure OpenAI** -- GPT-4o for chat and text-embedding-3-large for vectorization
 - **Cosmos DB** -- Stores chatbot configuration, chat history, and usage analytics
-- **Prompt Flow** -- RAG orchestration pipeline (query rewrite, search, context formatting, answer generation)
-- **Container Apps** -- Hosts the Python backend, React frontend, and Tenant Admin Portal
-- **API Management** -- Per-tenant subscription keys with server-side filter injection
+- **API Management** -- Two API surfaces: subscription-key API (`/api`) for custom frontends, OpenAI-compatible API (`/v1`) for third-party clients
+- **Container Apps** -- Hosts the Python backend, Tenant Admin Portal, Open WebUI, and LibreChat
+- **Open WebUI & LibreChat** -- Pre-built chat UIs that connect via the OpenAI-compatible API (no custom frontend code needed)
 
 For detailed architecture diagrams and data flow descriptions, see [docs/architecture.md](docs/architecture.md).
 
@@ -21,7 +21,6 @@ For detailed architecture diagrams and data flow descriptions, see [docs/archite
 
 - An Azure subscription with Contributor access
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) v2.50+
-- [Node.js](https://nodejs.org/) 18+ and npm
 - [Python](https://www.python.org/) 3.11+
 - [Docker](https://www.docker.com/) (for container builds)
 
@@ -35,7 +34,7 @@ az account set --subscription <your-subscription-id>
 
 az deployment sub create \
   --name deploy-dev \
-  --location australiaeast \
+  --location uksouth \
   --template-file infra/main.bicep \
   --parameters infra/parameters/dev.bicepparam
 ```
@@ -61,20 +60,7 @@ chmod +x scripts/upload-sample-docs.sh
   --search-endpoint https://<your-search-service>.search.windows.net
 ```
 
-### 4. Deploy Prompt Flow
-
-```bash
-chmod +x scripts/deploy-promptflow.sh
-
-./scripts/deploy-promptflow.sh \
-  --resource-group <your-resource-group> \
-  --workspace-name <your-ml-workspace> \
-  --endpoint-name rag-chat-endpoint
-```
-
-### 5. Run the Application Locally
-
-**Backend:**
+### 4. Run the Backend Locally
 
 ```bash
 cd app/backend
@@ -88,13 +74,36 @@ export COSMOS_ENDPOINT="https://<your-cosmos>.documents.azure.com:443/"
 python app.py
 ```
 
-**Frontend (in a separate terminal):**
+The backend exposes two API surfaces:
+- **Platform API** (`/chat`, `/config/<app_id>`, `/chat/history`) -- for custom frontends using APIM subscription keys
+- **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/models`) -- for Open WebUI, LibreChat, or any OpenAI-compatible client
+
+### 5. Connect a Chat Client
+
+The platform is designed to work with **any OpenAI-compatible client**. No custom frontend is required.
+
+**Open WebUI** (recommended for quick setup):
+
+```bash
+docker run -d -p 8080:8080 \
+  -e OPENAI_API_BASE_URL=https://<your-apim>.azure-api.net/v1 \
+  -e OPENAI_API_KEY=<apim-subscription-key> \
+  ghcr.io/open-webui/open-webui:main
+```
+
+**LibreChat**:
+
+Configure `librechat.yaml` to point at the APIM OpenAI-compatible endpoint. See the LibreChat docs for details.
+
+**Custom React Frontend** (optional):
 
 ```bash
 cd app/frontend
 npm install
 npm run dev
 ```
+
+Set `VITE_APP_ID`, `VITE_APIM_KEY`, and `VITE_APIM_ENDPOINT` in a `.env` file.
 
 ## Configuration Reference
 
@@ -109,14 +118,6 @@ npm run dev
 | `COSMOS_ENDPOINT` | Cosmos DB endpoint URL | (required) |
 | `COSMOS_DATABASE` | Cosmos DB database name | `rag-platform` |
 | `APIM_ENDPOINT` | API Management endpoint URL | (optional) |
-
-### Environment Variables (Frontend)
-
-| Variable | Description |
-|---|---|
-| `VITE_APP_ID` | Chatbot tenant identifier (e.g., `hr-chatbot`) |
-| `VITE_APIM_KEY` | APIM subscription key for the tenant |
-| `VITE_APIM_ENDPOINT` | APIM gateway endpoint URL |
 
 ### Chatbot Configuration (Cosmos DB)
 
@@ -140,15 +141,15 @@ Each chatbot is configured via a document in the `chatbot-config` container:
 
 The **Tenant Admin Portal** automates tenant onboarding. See [docs/admin-portal.md](docs/admin-portal.md) for the full design.
 
-From the admin portal UI, you can create a tenant, configure it, upload documents, and trigger reindexing — all in one place. The portal handles APIM product/subscription/named value creation, Cosmos DB config, blob uploads with `app_scope` metadata, and policy XML updates automatically.
+From the admin portal UI, you can create a tenant, configure it, upload documents, and trigger reindexing -- all in one place. The portal handles APIM product/subscription/named value creation, Cosmos DB config, blob uploads with `app_scope` metadata, and policy XML updates automatically.
 
 For the manual CLI-based approach, see [docs/adding-a-chatbot.md](docs/adding-a-chatbot.md).
 
 ### Admin Portal Documentation
 
-- [High-Level Design](docs/admin-portal.md) — Architecture, API routes, frontend views, file structure
-- [Azure Setup Details](docs/admin-portal-azure-setup.md) — How each Azure service is managed, RBAC requirements, policy XML mechanics
-- [Verification Guide](docs/admin-portal-verification.md) — Step-by-step instructions for checking the deployment and testing end-to-end
+- [High-Level Design](docs/admin-portal.md) -- Architecture, API routes, frontend views, file structure
+- [Azure Setup Details](docs/admin-portal-azure-setup.md) -- How each Azure service is managed, RBAC requirements, policy XML mechanics
+- [Verification Guide](docs/admin-portal-verification.md) -- Step-by-step instructions for checking the deployment and testing end-to-end
 
 ## CI/CD
 
@@ -172,7 +173,6 @@ Set these as GitHub repository variables (`vars`):
 - `RESOURCE_GROUP` -- Azure resource group name
 - `WORKSPACE_NAME` -- Azure ML workspace name
 - `ENDPOINT_NAME` -- Prompt Flow endpoint name
-- `VITE_APP_ID` -- Default chatbot ID for the frontend build
 
 Configure GitHub environments (`dev`, `staging`, `production`) with required reviewers for staging and production.
 
@@ -188,7 +188,8 @@ multi_tenant_rag/
     backend/               # Python Quart API server
       approaches/          # RAG chat approach implementation
       chat_history/        # Cosmos DB chat history manager
-    frontend/              # React + Vite SPA
+      usage/               # Token usage analytics logger
+    frontend/              # React + Vite SPA (optional custom frontend)
       src/
         api/               # API client
         pages/chat/        # Chat page components
