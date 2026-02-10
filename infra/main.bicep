@@ -94,7 +94,7 @@ module keyvault 'modules/keyvault.bicep' = {
   }
 }
 
-// 6. AI Search (depends on identity, storage)
+// 6. AI Search (depends on identity, storage, openai)
 module aiSearch 'modules/ai-search.bicep' = {
   name: 'ai-search-deployment'
   scope: rg
@@ -104,6 +104,7 @@ module aiSearch 'modules/ai-search.bicep' = {
     environment: environmentName
     identityPrincipalId: identity.outputs.identityPrincipalId
     storageAccountId: storage.outputs.storageAccountId
+    openaiAccountId: openai.outputs.openaiId
     tags: allTags
   }
 }
@@ -175,6 +176,8 @@ module aiSearchDataplane 'modules/ai-search-dataplane.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     documentsContainerName: storage.outputs.documentsContainerName
     identityId: identity.outputs.identityId
+    subscriptionId: subscription().subscriptionId
+    resourceGroupName: rg.name
     tags: allTags
   }
 }

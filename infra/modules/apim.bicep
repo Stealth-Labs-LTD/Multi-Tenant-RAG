@@ -130,7 +130,7 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = 
         <set-variable name="requestBody" value="@(context.Request.Body.As<JObject>())" />
         <set-body>@{
             var body = (JObject)context.Variables["requestBody"];
-            body["filter"] = $"app_scope/any(s: search.in(s, '{(string)context.Variables["appScope"]}'))";
+            body["filter"] = $"search.in(app_scope, '{(string)context.Variables["appScope"]}')";
             body["app_id"] = (string)context.Variables["appScope"];
             return body.ToString();
         }</set-body>

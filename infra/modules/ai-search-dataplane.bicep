@@ -21,6 +21,7 @@ param searchAdminKey string
 param openaiEndpoint string
 
 @description('Azure OpenAI resource name')
+#disable-next-line no-unused-params
 param openaiName string
 
 @description('Embedding model deployment name')
@@ -38,11 +39,18 @@ param identityId string
 @description('Tags to apply to resources')
 param tags object
 
+@description('Subscription ID for resource ID construction')
+param subscriptionId string
+
+@description('Resource group name for resource ID construction')
+param resourceGroupName string
+
 var searchApiVersion = '2024-07-01'
 var dataSourceName = 'documents-datasource'
 var skillsetName = 'documents-skillset'
 var indexName = 'documents-index'
 var indexerName = 'documents-indexer'
+var storageResourceId = '/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}'
 
 resource deploymentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: '${searchName}-dataplane-setup'
@@ -65,9 +73,8 @@ resource deploymentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'SEARCH_ADMIN_KEY', secureValue: searchAdminKey }
       { name: 'SEARCH_API_VERSION', value: searchApiVersion }
       { name: 'OPENAI_ENDPOINT', value: openaiEndpoint }
-      { name: 'OPENAI_NAME', value: openaiName }
       { name: 'EMBEDDING_DEPLOYMENT', value: embeddingDeploymentName }
-      { name: 'STORAGE_ACCOUNT', value: storageAccountName }
+      { name: 'STORAGE_RESOURCE_ID', value: storageResourceId }
       { name: 'CONTAINER_NAME', value: documentsContainerName }
       { name: 'DATASOURCE_NAME', value: dataSourceName }
       { name: 'SKILLSET_NAME', value: skillsetName }
@@ -78,200 +85,122 @@ resource deploymentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       #!/bin/bash
       set -e
 
-      HEADERS="Content-Type: application/json
-      api-key: $SEARCH_ADMIN_KEY"
+      api_call() {
+        local method=$1 path=$2 body=$3
+        local url="${SEARCH_ENDPOINT}${path}?api-version=${SEARCH_API_VERSION}"
+        local status
+        status=$(curl -s -w "%{http_code}" -o /tmp/response.json -X "$method" "$url" \
+          -H "Content-Type: application/json" -H "api-key: ${SEARCH_ADMIN_KEY}" \
+          ${body:+-d "$body"})
+        echo "  HTTP $status"
+        if [ "$status" -ge 400 ]; then
+          cat /tmp/response.json
+          echo ""
+        fi
+      }
 
-      # ---- Data Source ----
-      echo "Creating data source..."
-      curl -s -X PUT "$SEARCH_ENDPOINT/datasources/$DATASOURCE_NAME?api-version=$SEARCH_API_VERSION" \
-        -H "Content-Type: application/json" \
-        -H "api-key: $SEARCH_ADMIN_KEY" \
-        -d '{
-          "name": "'"$DATASOURCE_NAME"'",
-          "type": "azureblob",
-          "credentials": {
-            "connectionString": "ResourceId=/subscriptions/'$(az account show --query id -o tsv)'/resourceGroups/'$(az group list --query "[?contains(name, '\'rag-\'')].name | [0]" -o tsv)'/providers/Microsoft.Storage/storageAccounts/'"$STORAGE_ACCOUNT"';"
-          },
-          "container": {
-            "name": "'"$CONTAINER_NAME"'"
-          },
-          "identity": {
-            "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
-            "userAssignedIdentity": ""
-          }
-        }' || true
+      echo "=== Creating data source ==="
+      api_call PUT "/datasources/${DATASOURCE_NAME}" '{
+        "name": "'"${DATASOURCE_NAME}"'",
+        "type": "azureblob",
+        "credentials": {
+          "connectionString": "ResourceId='"${STORAGE_RESOURCE_ID}"';"
+        },
+        "container": { "name": "'"${CONTAINER_NAME}"'" },
+        "identity": null
+      }'
 
-      # Use managed identity for the data source (system-assigned on search service)
-      curl -s -X PUT "$SEARCH_ENDPOINT/datasources/$DATASOURCE_NAME?api-version=$SEARCH_API_VERSION" \
-        -H "Content-Type: application/json" \
-        -H "api-key: $SEARCH_ADMIN_KEY" \
-        -d '{
-          "name": "'"$DATASOURCE_NAME"'",
-          "type": "azureblob",
-          "credentials": {
-            "connectionString": "ResourceId=/subscriptions/'$(az account show --query id -o tsv)'/resourceGroups/'$(az group list --query "[?contains(name, '\'rag-\'')].name | [0]" -o tsv)'/providers/Microsoft.Storage/storageAccounts/'"$STORAGE_ACCOUNT"';"
-          },
-          "container": {
-            "name": "'"$CONTAINER_NAME"'"
-          },
-          "identity": null
-        }'
-      echo "Data source created."
-
-      # ---- Skillset ----
-      echo "Creating skillset..."
-      curl -s -X PUT "$SEARCH_ENDPOINT/skillsets/$SKILLSET_NAME?api-version=$SEARCH_API_VERSION" \
-        -H "Content-Type: application/json" \
-        -H "api-key: $SEARCH_ADMIN_KEY" \
-        -d '{
-          "name": "'"$SKILLSET_NAME"'",
-          "skills": [
-            {
-              "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
-              "name": "split-skill",
-              "description": "Split documents into chunks",
-              "context": "/document",
-              "textSplitMode": "pages",
-              "maximumPageLength": 2000,
-              "pageOverlapLength": 500,
-              "inputs": [
-                { "name": "text", "source": "/document/content" }
-              ],
-              "outputs": [
-                { "name": "textItems", "targetName": "pages" }
-              ]
-            },
-            {
-              "@odata.type": "#Microsoft.Skills.Custom.AzureOpenAIEmbeddingSkill",
-              "name": "embedding-skill",
-              "description": "Generate embeddings",
-              "context": "/document/pages/*",
-              "resourceUri": "'"$OPENAI_ENDPOINT"'",
-              "deploymentId": "'"$EMBEDDING_DEPLOYMENT"'",
-              "modelName": "text-embedding-3-large",
-              "inputs": [
-                { "name": "text", "source": "/document/pages/*" }
-              ],
-              "outputs": [
-                { "name": "embedding", "targetName": "text_vector" }
-              ]
+      echo "=== Creating index ==="
+      api_call PUT "/indexes/${INDEX_NAME}" '{
+        "name": "'"${INDEX_NAME}"'",
+        "fields": [
+          { "name": "chunk_id", "type": "Edm.String", "key": true, "filterable": true, "sortable": false, "searchable": true, "analyzer": "keyword" },
+          { "name": "parent_id", "type": "Edm.String", "filterable": true, "sortable": false, "searchable": false },
+          { "name": "title", "type": "Edm.String", "searchable": true, "filterable": false, "retrievable": true },
+          { "name": "chunk", "type": "Edm.String", "searchable": true, "filterable": false, "retrievable": true },
+          { "name": "text_vector", "type": "Collection(Edm.Single)", "searchable": true, "retrievable": false, "dimensions": 3072, "vectorSearchProfile": "default-vector-profile" },
+          { "name": "source_file", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true },
+          { "name": "app_scope", "type": "Edm.String", "filterable": true, "retrievable": false, "searchable": false }
+        ],
+        "vectorSearch": {
+          "algorithms": [{ "name": "default-hnsw", "kind": "hnsw", "hnswParameters": { "metric": "cosine", "m": 4, "efConstruction": 400, "efSearch": 500 } }],
+          "profiles": [{ "name": "default-vector-profile", "algorithm": "default-hnsw" }]
+        },
+        "semantic": {
+          "configurations": [{
+            "name": "default-semantic-config",
+            "prioritizedFields": {
+              "prioritizedContentFields": [{ "fieldName": "chunk" }],
+              "titleField": { "fieldName": "title" }
             }
-          ],
-          "indexProjections": {
-            "selectors": [
-              {
-                "targetIndexName": "'"$INDEX_NAME"'",
-                "parentKeyFieldName": "parent_id",
-                "sourceContext": "/document/pages/*",
-                "mappings": [
-                  { "name": "chunk", "source": "/document/pages/*" },
-                  { "name": "text_vector", "source": "/document/pages/*/text_vector" },
-                  { "name": "title", "source": "/document/metadata_storage_name" }
-                ]
-              }
-            ],
-            "parameters": {
-              "projectionMode": "generatedKeyAsId"
-            }
-          }
-        }'
-      echo "Skillset created."
+          }]
+        }
+      }'
 
-      # ---- Index ----
-      echo "Creating index..."
-      curl -s -X PUT "$SEARCH_ENDPOINT/indexes/$INDEX_NAME?api-version=$SEARCH_API_VERSION" \
-        -H "Content-Type: application/json" \
-        -H "api-key: $SEARCH_ADMIN_KEY" \
-        -d '{
-          "name": "'"$INDEX_NAME"'",
-          "fields": [
-            { "name": "chunk_id", "type": "Edm.String", "key": true, "searchable": true, "filterable": true, "sortable": false, "facetable": false, "retrievable": true },
-            { "name": "parent_id", "type": "Edm.String", "searchable": true, "filterable": true, "sortable": false, "facetable": false, "retrievable": true },
-            { "name": "title", "type": "Edm.String", "searchable": true, "filterable": false, "sortable": false, "facetable": false, "retrievable": true },
-            { "name": "chunk", "type": "Edm.String", "searchable": true, "filterable": false, "sortable": false, "facetable": false, "retrievable": true },
-            { "name": "text_vector", "type": "Collection(Edm.Single)", "searchable": true, "filterable": false, "sortable": false, "facetable": false, "retrievable": false, "dimensions": 3072, "vectorSearchProfile": "hnsw-profile" },
-            { "name": "source_file", "type": "Edm.String", "searchable": false, "filterable": true, "sortable": false, "facetable": false, "retrievable": true },
-            { "name": "app_scope", "type": "Collection(Edm.String)", "searchable": false, "filterable": true, "sortable": false, "facetable": false, "retrievable": false }
-          ],
-          "vectorSearch": {
-            "algorithms": [
-              {
-                "name": "hnsw-algorithm",
-                "kind": "hnsw",
-                "hnswParameters": {
-                  "metric": "cosine",
-                  "m": 4,
-                  "efConstruction": 400,
-                  "efSearch": 500
-                }
-              }
-            ],
-            "vectorizers": [
-              {
-                "name": "openai-vectorizer",
-                "kind": "azureOpenAI",
-                "azureOpenAIParameters": {
-                  "resourceUri": "'"$OPENAI_ENDPOINT"'",
-                  "deploymentId": "'"$EMBEDDING_DEPLOYMENT"'",
-                  "modelName": "text-embedding-3-large"
-                }
-              }
-            ],
-            "profiles": [
-              {
-                "name": "hnsw-profile",
-                "algorithm": "hnsw-algorithm",
-                "vectorizer": "openai-vectorizer"
-              }
+      echo "=== Creating skillset ==="
+      api_call PUT "/skillsets/${SKILLSET_NAME}" '{
+        "name": "'"${SKILLSET_NAME}"'",
+        "description": "Skillset for chunking and vectorizing documents",
+        "skills": [
+          {
+            "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
+            "name": "split-skill",
+            "context": "/document",
+            "inputs": [{ "name": "text", "source": "/document/content" }],
+            "outputs": [{ "name": "textItems", "targetName": "chunks" }],
+            "textSplitMode": "pages",
+            "maximumPageLength": 2000,
+            "pageOverlapLength": 500
+          },
+          {
+            "@odata.type": "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
+            "name": "embedding-skill",
+            "context": "/document/chunks/*",
+            "inputs": [{ "name": "text", "source": "/document/chunks/*" }],
+            "outputs": [{ "name": "embedding", "targetName": "text_vector" }],
+            "resourceUri": "'"${OPENAI_ENDPOINT}"'",
+            "deploymentId": "'"${EMBEDDING_DEPLOYMENT}"'",
+            "modelName": "text-embedding-3-large",
+            "authIdentity": null
+          }
+        ],
+        "indexProjections": {
+          "selectors": [{
+            "targetIndexName": "'"${INDEX_NAME}"'",
+            "parentKeyFieldName": "parent_id",
+            "sourceContext": "/document/chunks/*",
+            "mappings": [
+              { "name": "chunk", "source": "/document/chunks/*" },
+              { "name": "text_vector", "source": "/document/chunks/*/text_vector" },
+              { "name": "title", "source": "/document/metadata_storage_name" },
+              { "name": "source_file", "source": "/document/metadata_storage_path" },
+              { "name": "app_scope", "source": "/document/app_scope" }
             ]
-          },
-          "semantic": {
-            "defaultConfiguration": "default-semantic-config",
-            "configurations": [
-              {
-                "name": "default-semantic-config",
-                "prioritizedFields": {
-                  "titleField": { "fieldName": "title" },
-                  "contentFields": [
-                    { "fieldName": "chunk" }
-                  ]
-                }
-              }
-            ]
-          }
-        }'
-      echo "Index created."
+          }],
+          "parameters": { "projectionMode": "skipIndexingParentDocuments" }
+        }
+      }'
 
-      # ---- Indexer ----
-      echo "Creating indexer..."
-      curl -s -X PUT "$SEARCH_ENDPOINT/indexers/$INDEXER_NAME?api-version=$SEARCH_API_VERSION" \
-        -H "Content-Type: application/json" \
-        -H "api-key: $SEARCH_ADMIN_KEY" \
-        -d '{
-          "name": "'"$INDEXER_NAME"'",
-          "dataSourceName": "'"$DATASOURCE_NAME"'",
-          "skillsetName": "'"$SKILLSET_NAME"'",
-          "targetIndexName": "'"$INDEX_NAME"'",
-          "schedule": {
-            "interval": "PT5M"
-          },
-          "fieldMappings": [
-            { "sourceFieldName": "metadata_storage_path", "targetFieldName": "parent_id", "mappingFunction": { "name": "base64Encode" } },
-            { "sourceFieldName": "metadata_storage_name", "targetFieldName": "title" }
-          ],
-          "outputFieldMappings": [
-            { "sourceFieldName": "/document/pages/*/text_vector", "targetFieldName": "text_vector" },
-            { "sourceFieldName": "/document/pages/*", "targetFieldName": "chunk" }
-          ],
-          "parameters": {
-            "configuration": {
-              "dataToExtract": "contentAndMetadata",
-              "parsingMode": "default"
-            }
+      echo "=== Creating indexer ==="
+      api_call PUT "/indexers/${INDEXER_NAME}" '{
+        "name": "'"${INDEXER_NAME}"'",
+        "dataSourceName": "'"${DATASOURCE_NAME}"'",
+        "targetIndexName": "'"${INDEX_NAME}"'",
+        "skillsetName": "'"${SKILLSET_NAME}"'",
+        "schedule": { "interval": "PT5M" },
+        "parameters": {
+          "configuration": {
+            "dataToExtract": "contentAndMetadata",
+            "parsingMode": "default",
+            "imageAction": "none"
           }
-        }'
-      echo "Indexer created."
-      echo "All AI Search data-plane resources created successfully."
+        },
+        "fieldMappings": [
+          { "sourceFieldName": "metadata_storage_path", "targetFieldName": "chunk_id", "mappingFunction": { "name": "base64Encode" } }
+        ]
+      }'
+
+      echo "=== All AI Search data-plane resources created ==="
     '''
   }
 }

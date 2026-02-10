@@ -41,7 +41,7 @@ class ChatReadRetrieveRead:
     async def _search(
         self, query: str, app_id: str, top: int = 5
     ) -> list[dict[str, Any]]:
-        filter_expression = f"app_scope/any(s: search.in(s, '{app_id}'))"
+        filter_expression = f"search.in(app_scope, '{app_id}')"
 
         vector_query = VectorizableTextQuery(
             text=query,

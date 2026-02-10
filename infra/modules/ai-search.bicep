@@ -19,6 +19,9 @@ param identityPrincipalId string
 @description('Resource ID of the storage account (for search service blob reader role)')
 param storageAccountId string
 
+@description('Resource ID of the Azure OpenAI account (for search service OpenAI user role)')
+param openaiAccountId string
+
 @description('Tags to apply to resources')
 param tags object
 
@@ -81,6 +84,22 @@ resource storageBlobReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-
 // Reference the existing storage account for scoping the role assignment
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: last(split(storageAccountId, '/'))
+}
+
+// Reference the existing OpenAI account for scoping the role assignment
+resource openaiAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
+  name: last(split(openaiAccountId, '/'))
+}
+
+// Cognitive Services OpenAI User role for search service system identity on OpenAI account
+resource openaiUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(openaiAccountId, searchService.id, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+  scope: openaiAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+    principalId: searchService.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 @description('Azure AI Search endpoint URL')

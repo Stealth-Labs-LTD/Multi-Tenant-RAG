@@ -77,6 +77,9 @@ output openaiEndpoint string = openai.properties.endpoint
 @description('Azure OpenAI resource name')
 output openaiName string = openai.name
 
+@description('Azure OpenAI resource ID')
+output openaiId string = openai.id
+
 @description('GPT-4o deployment name')
 output gpt4oDeploymentName string = models[0].name
 
