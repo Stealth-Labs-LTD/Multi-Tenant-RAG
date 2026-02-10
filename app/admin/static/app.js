@@ -96,7 +96,9 @@ function getRoute() {
 function router() {
   const path = getRoute();
 
-  if (path === "/tenants/new") {
+  if (path === "/usage") {
+    renderUsageOverview();
+  } else if (path === "/tenants/new") {
     renderCreateTenant();
   } else if (path.startsWith("/tenants/") && path !== "/tenants/new") {
     const id = decodeURIComponent(path.split("/tenants/")[1]);
@@ -108,6 +110,31 @@ function router() {
 
 window.addEventListener("hashchange", router);
 
+// ── Usage helpers ──
+
+function formatNumber(n) {
+  if (n == null) return "0";
+  return n.toLocaleString();
+}
+
+function formatCost(n) {
+  if (n == null || n === 0) return "$0.00";
+  if (n < 0.01) return "<$0.01";
+  return "$" + n.toFixed(2);
+}
+
+function exportCSV(headers, rows, filename) {
+  const csv = [headers.join(",")]
+    .concat(rows.map((r) => r.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 // ── Views ──
 
 // -- Tenant List --
@@ -117,7 +144,10 @@ async function renderTenantList() {
   app.innerHTML = `
     <div class="page-header">
       <h2>Tenants</h2>
-      <a href="#/tenants/new" class="btn btn-primary">+ Create Tenant</a>
+      <div>
+        <a href="#/usage" class="btn btn-secondary" style="margin-right:8px">Usage Overview</a>
+        <a href="#/tenants/new" class="btn btn-primary">+ Create Tenant</a>
+      </div>
     </div>
     <div class="card">
       <div class="card-body loading-center">
@@ -335,6 +365,19 @@ async function renderTenantDetail(tenantId) {
         <h2>${escapeHtml(tenant.chatbotName || tenantId)}</h2>
         <button class="btn btn-danger" id="delete-tenant-btn">Delete Tenant</button>
       </div>
+      <div class="card" id="usage-panel" style="margin-bottom:20px">
+        <div class="card-header">
+          <h2>Usage</h2>
+          <div class="period-selector" id="usage-period">
+            <button data-days="7">7d</button>
+            <button data-days="30" class="active">30d</button>
+            <button data-days="90">90d</button>
+          </div>
+        </div>
+        <div class="card-body" id="usage-content">
+          <div class="loading-center"><span class="spinner"></span> Loading usage...</div>
+        </div>
+      </div>
       <div class="panel-grid">
         <div class="card" id="config-panel">
           <div class="card-header"><h2>Configuration</h2></div>
@@ -362,6 +405,8 @@ async function renderTenantDetail(tenantId) {
     loadDocuments(tenantId);
     setupReindex();
     loadIndexerStatus();
+    loadTenantUsage(tenantId, 30);
+    setupUsagePeriodSelector(tenantId);
   } catch (err) {
     showToast("Failed to load tenant: " + err.message, "error");
     app.innerHTML = `
@@ -645,6 +690,221 @@ async function loadIndexerStatus() {
         <span class="badge badge-pending">unavailable</span>
       </div>
     `;
+  }
+}
+
+// ── Tenant Usage ──
+
+function setupUsagePeriodSelector(tenantId) {
+  const container = document.getElementById("usage-period");
+  if (!container) return;
+  container.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      container.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadTenantUsage(tenantId, parseInt(btn.dataset.days, 10));
+    });
+  });
+}
+
+async function loadTenantUsage(tenantId, days) {
+  const container = document.getElementById("usage-content");
+  if (!container) return;
+  container.innerHTML = `<div class="loading-center"><span class="spinner"></span> Loading usage...</div>`;
+
+  try {
+    const data = await api("GET", `/api/tenants/${encodeURIComponent(tenantId)}/usage?days=${days}`);
+    const s = data.summary;
+    const daily = data.daily || [];
+
+    container.innerHTML = `
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Requests</div>
+          <div class="stat-value">${formatNumber(s.total_requests)}</div>
+          <div class="stat-sub">Last ${days} days</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Prompt Tokens</div>
+          <div class="stat-value">${formatNumber(s.total_prompt_tokens)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Completion Tokens</div>
+          <div class="stat-value">${formatNumber(s.total_completion_tokens)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Estimated Cost</div>
+          <div class="stat-value cost">${formatCost(s.estimated_cost_usd)}</div>
+          <div class="stat-sub">${formatNumber(s.total_tokens)} total tokens</div>
+        </div>
+      </div>
+      ${daily.length ? buildBarChart(daily) : '<p style="color:var(--color-text-muted);font-size:13px;">No usage data for this period.</p>'}
+    `;
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--color-error);font-size:13px;">Failed to load usage data: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function buildBarChart(daily) {
+  const maxTokens = Math.max(...daily.map((d) => d.total_tokens || 0), 1);
+  const bars = daily
+    .map((d) => {
+      const pct = Math.max(((d.total_tokens || 0) / maxTokens) * 100, 1);
+      const label = d.date.slice(5); // MM-DD
+      return `
+        <div class="chart-bar-group">
+          <div class="chart-bar" style="height:${pct}%">
+            <div class="chart-tooltip">${d.date}: ${formatNumber(d.total_tokens)} tokens, ${formatNumber(d.requests)} req, ${formatCost(d.estimated_cost_usd)}</div>
+          </div>
+          <div class="chart-label">${label}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="chart-container">
+      <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:8px;">Daily token usage</div>
+      <div class="chart-bars">${bars}</div>
+    </div>
+  `;
+}
+
+// ── Usage Overview ──
+
+async function renderUsageOverview() {
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <div class="breadcrumb"><a href="#/">Tenants</a> / Usage Overview</div>
+    <div class="page-header">
+      <h2>Usage Overview</h2>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="period-selector" id="overview-period">
+          <button data-days="7">7d</button>
+          <button data-days="30" class="active">30d</button>
+          <button data-days="90">90d</button>
+        </div>
+      </div>
+    </div>
+    <div id="overview-content">
+      <div class="loading-center"><span class="spinner"></span> Loading usage data...</div>
+    </div>
+  `;
+
+  loadUsageOverview(30);
+
+  document.getElementById("overview-period").querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById("overview-period").querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadUsageOverview(parseInt(btn.dataset.days, 10));
+    });
+  });
+}
+
+async function loadUsageOverview(days) {
+  const container = document.getElementById("overview-content");
+  if (!container) return;
+  container.innerHTML = `<div class="loading-center"><span class="spinner"></span> Loading usage data...</div>`;
+
+  try {
+    const data = await api("GET", `/api/usage/overview?days=${days}`);
+    const g = data.grand_total;
+    const tenants = data.tenants || [];
+    const rates = data.cost_rates || {};
+
+    const rows = tenants
+      .map(
+        (t) => `
+      <tr>
+        <td><a href="#/tenants/${encodeURIComponent(t.tenant_id)}">${escapeHtml(t.tenant_id)}</a></td>
+        <td class="number">${formatNumber(t.requests)}</td>
+        <td class="number">${formatNumber(t.prompt_tokens)}</td>
+        <td class="number">${formatNumber(t.completion_tokens)}</td>
+        <td class="number">${formatNumber(t.total_tokens)}</td>
+        <td class="number"><strong>${formatCost(t.estimated_cost_usd)}</strong></td>
+      </tr>
+    `
+      )
+      .join("");
+
+    container.innerHTML = `
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Requests</div>
+          <div class="stat-value">${formatNumber(g.total_requests)}</div>
+          <div class="stat-sub">Last ${days} days</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Prompt Tokens</div>
+          <div class="stat-value">${formatNumber(g.total_prompt_tokens)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Completion Tokens</div>
+          <div class="stat-value">${formatNumber(g.total_completion_tokens)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Estimated Cost</div>
+          <div class="stat-value cost">${formatCost(g.estimated_cost_usd)}</div>
+          <div class="stat-sub">${formatNumber(g.total_tokens)} total tokens</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2>Per-Tenant Breakdown</h2>
+          <button class="btn btn-secondary btn-sm export-btn" id="export-csv-btn">Export CSV</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="usage-table">
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th class="number">Requests</th>
+                  <th class="number">Prompt Tokens</th>
+                  <th class="number">Completion Tokens</th>
+                  <th class="number">Total Tokens</th>
+                  <th class="number">Est. Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || '<tr class="empty-row"><td colspan="6">No usage data for this period.</td></tr>'}
+              </tbody>
+              <tfoot>
+                <tr style="font-weight:600">
+                  <td>Total</td>
+                  <td class="number">${formatNumber(g.total_requests)}</td>
+                  <td class="number">${formatNumber(g.total_prompt_tokens)}</td>
+                  <td class="number">${formatNumber(g.total_completion_tokens)}</td>
+                  <td class="number">${formatNumber(g.total_tokens)}</td>
+                  <td class="number">${formatCost(g.estimated_cost_usd)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p style="font-size:12px;color:var(--color-text-muted);margin-top:12px;">
+            Cost estimates based on GPT-4o rates: $${rates.prompt_per_1k}/1K prompt tokens, $${rates.completion_per_1k}/1K completion tokens (${rates.currency}).
+          </p>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("export-csv-btn").addEventListener("click", () => {
+      const csvHeaders = ["Tenant", "Requests", "Prompt Tokens", "Completion Tokens", "Total Tokens", "Estimated Cost (USD)"];
+      const csvRows = tenants.map((t) => [
+        t.tenant_id,
+        t.requests,
+        t.prompt_tokens,
+        t.completion_tokens,
+        t.total_tokens,
+        t.estimated_cost_usd,
+      ]);
+      csvRows.push(["TOTAL", g.total_requests, g.total_prompt_tokens, g.total_completion_tokens, g.total_tokens, g.estimated_cost_usd]);
+      exportCSV(csvHeaders, csvRows, `usage-${days}d-${new Date().toISOString().slice(0, 10)}.csv`);
+      showToast("CSV exported", "success");
+    });
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--color-error);">Failed to load usage: ${escapeHtml(err.message)}</p>`;
   }
 }
 

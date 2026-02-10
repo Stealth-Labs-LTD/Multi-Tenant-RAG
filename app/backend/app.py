@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -12,8 +14,11 @@ from quart_cors import cors
 
 from approaches.chatreadretrieveread import ChatReadRetrieveRead
 from chat_history.cosmosdb import CosmosDBChatHistory
+from usage.cosmosdb import UsageLogger
 
-app = Quart(__name__, static_folder="static", static_url_path="")
+logger = logging.getLogger(__name__)
+
+app = Quart(__name__)
 app = cors(app, allow_origin="*")
 
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
@@ -30,11 +35,12 @@ openai_client = None
 cosmos_client = None
 chat_approach = None
 chat_history = None
+usage_logger = None
 
 
 @app.before_serving
 async def setup_clients():
-    global credential, search_client, openai_client, cosmos_client, chat_approach, chat_history
+    global credential, search_client, openai_client, cosmos_client, chat_approach, chat_history, usage_logger
 
     credential = DefaultAzureCredential()
 
@@ -69,6 +75,11 @@ async def setup_clients():
         database_name=COSMOS_DATABASE,
     )
 
+    usage_logger = UsageLogger(
+        cosmos_client=cosmos_client,
+        database_name=COSMOS_DATABASE,
+    )
+
 
 @app.after_serving
 async def close_clients():
@@ -78,6 +89,18 @@ async def close_clients():
         await cosmos_client.close()
     if credential:
         await credential.close()
+
+
+async def _log_usage_fire_and_forget(app_id: str, usage: dict) -> None:
+    try:
+        await usage_logger.log(
+            app_id=app_id,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+        )
+    except Exception:
+        logger.exception("Failed to log usage for %s", app_id)
 
 
 @app.route("/chat", methods=["POST"])
@@ -91,8 +114,13 @@ async def chat():
         return jsonify({"error": "messages and context.app_id are required"}), 400
 
     async def stream():
+        usage = None
         async for chunk in chat_approach.run_with_streaming(messages, app_id):
+            if chunk.get("usage"):
+                usage = chunk["usage"]
             yield json.dumps(chunk) + "\n"
+        if usage:
+            asyncio.create_task(_log_usage_fire_and_forget(app_id, usage))
 
     return Response(stream(), mimetype="application/x-ndjson")
 
@@ -161,26 +189,46 @@ async def health():
     return jsonify({"status": "ok"})
 
 
-# Model name → app_scope mapping for tenant-aware routing.
-# When a UI sends model="hr-assistant", the backend resolves it to app_scope="hr-chatbot".
-# Falls back to APIM-injected context.app_id for the generic "rag-platform" model.
-MODEL_TENANT_MAP = {
-    "hr-assistant": "hr-chatbot",
-    "legal-assistant": "legal-chatbot",
-    "exec-briefing": "exec-chatbot",
-}
+@app.route("/api/usage", methods=["GET"])
+async def get_usage():
+    app_id = request.args.get("app_id", "")
+    days = request.args.get("days", "30")
+
+    if not app_id:
+        return jsonify({"error": "app_id is required"}), 400
+
+    try:
+        days = int(days)
+    except ValueError:
+        return jsonify({"error": "days must be an integer"}), 400
+
+    result = await usage_logger.get_usage(app_id, days)
+    return jsonify(result)
+
+
+async def _list_chatbot_configs() -> list[dict]:
+    database = cosmos_client.get_database_client(COSMOS_DATABASE)
+    container = database.get_container_client("chatbot-config")
+    configs = []
+    async for item in container.query_items(
+        query="SELECT c.chatbotId, c.chatbotName FROM c",
+        enable_cross_partition_query=True,
+    ):
+        configs.append(item)
+    return configs
 
 
 @app.route("/v1/models", methods=["GET"])
 async def list_models():
+    configs = await _list_chatbot_configs()
     models = [
         {
-            "id": model_id,
+            "id": config["chatbotId"],
             "object": "model",
             "created": 1700000000,
             "owned_by": "rag-platform",
         }
-        for model_id in MODEL_TENANT_MAP
+        for config in configs
     ]
     return jsonify({"object": "list", "data": models})
 
@@ -193,15 +241,15 @@ async def openai_chat_completions():
     model = body.get("model", "")
     stream = body.get("stream", False)
 
-    # Resolve tenant: model name takes priority, then APIM-injected context
-    app_id = MODEL_TENANT_MAP.get(model) or context.get("app_id", "")
+    # Tenant resolved by APIM inbound policy (injected as context.app_id)
+    app_id = context.get("app_id", "")
 
     if not messages or not app_id:
         return (
             jsonify(
                 {
                     "error": {
-                        "message": "messages are required and tenant must be resolvable from model name or context.app_id",
+                        "message": "messages are required and context.app_id must be provided by APIM",
                         "type": "invalid_request_error",
                     }
                 }
@@ -215,9 +263,12 @@ async def openai_chat_completions():
     if stream:
 
         async def sse_stream():
+            usage = None
             async for chunk in chat_approach.run_with_streaming(messages, app_id):
                 delta_content = chunk.get("delta", {}).get("content", "")
                 citations = chunk.get("citations")
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
 
                 sse_chunk = {
                     "id": completion_id,
@@ -238,8 +289,13 @@ async def openai_chat_completions():
                 if citations:
                     sse_chunk["citations"] = citations
                     sse_chunk["choices"][0]["finish_reason"] = "stop"
+                    if usage:
+                        sse_chunk["usage"] = usage
 
                 yield f"data: {json.dumps(sse_chunk)}\n\n"
+
+            if usage:
+                asyncio.create_task(_log_usage_fire_and_forget(app_id, usage))
 
             yield "data: [DONE]\n\n"
 
@@ -248,11 +304,14 @@ async def openai_chat_completions():
     # Non-streaming: collect full response
     full_content = ""
     citations = None
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     async for chunk in chat_approach.run_with_streaming(messages, app_id):
         delta_content = chunk.get("delta", {}).get("content", "")
         full_content += delta_content
         if chunk.get("citations"):
             citations = chunk["citations"]
+        if chunk.get("usage"):
+            usage = chunk["usage"]
 
     result = {
         "id": completion_id,
@@ -266,19 +325,12 @@ async def openai_chat_completions():
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
     }
     if citations:
         result["citations"] = citations
 
+    if usage.get("total_tokens", 0) > 0:
+        asyncio.create_task(_log_usage_fire_and_forget(app_id, usage))
+
     return jsonify(result)
-
-
-@app.route("/")
-async def index():
-    return await app.send_static_file("index.html")
-
-
-@app.route("/<path:path>")
-async def static_files(path: str):
-    return await app.send_static_file(path)

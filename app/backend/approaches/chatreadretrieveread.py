@@ -133,9 +133,17 @@ class ChatReadRetrieveRead:
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
+        usage = None
         async for event in response:
+            if event.usage:
+                usage = {
+                    "prompt_tokens": event.usage.prompt_tokens,
+                    "completion_tokens": event.usage.completion_tokens,
+                    "total_tokens": event.usage.total_tokens,
+                }
             if event.choices and len(event.choices) > 0:
                 choice = event.choices[0]
                 if choice.delta and choice.delta.content:
@@ -146,7 +154,10 @@ class ChatReadRetrieveRead:
                         }
                     }
 
-        yield {
+        final_chunk = {
             "delta": {"content": "", "role": "assistant"},
             "citations": citations,
         }
+        if usage:
+            final_chunk["usage"] = usage
+        yield final_chunk

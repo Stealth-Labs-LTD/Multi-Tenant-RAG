@@ -602,4 +602,150 @@ input[type="color"] {
   tbody td {
     padding: 8px 10px;
   }
+
+  .stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ── Usage / Stats ── */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.stat-card .stat-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.stat-card .stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.stat-card .stat-value.cost {
+  color: var(--color-primary);
+}
+
+.stat-card .stat-sub {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* Bar chart */
+.chart-container {
+  position: relative;
+  margin-top: 16px;
+}
+
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 160px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+}
+
+.chart-bar-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.chart-bar {
+  width: 100%;
+  max-width: 24px;
+  background: var(--color-primary);
+  border-radius: 2px 2px 0 0;
+  min-height: 1px;
+  transition: opacity 0.2s;
+  cursor: default;
+  position: relative;
+}
+
+.chart-bar:hover {
+  opacity: 0.8;
+}
+
+.chart-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  text-align: center;
+}
+
+.chart-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-text);
+  color: #fff;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.chart-bar:hover .chart-tooltip {
+  display: block;
+}
+
+.period-selector {
+  display: flex;
+  gap: 6px;
+}
+
+.period-selector button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.period-selector button.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.usage-table td.number,
+.usage-table th.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.export-btn {
+  font-size: 12px;
 }

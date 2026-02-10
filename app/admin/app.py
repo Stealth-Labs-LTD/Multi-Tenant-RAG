@@ -10,6 +10,7 @@ from services.apim import ApimService
 from services.cosmos import TenantConfigService
 from services.search import SearchService
 from services.storage import StorageService
+from services.usage import UsageService
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +26,22 @@ STORAGE_ACCOUNT_NAME = os.environ.get("STORAGE_ACCOUNT_NAME", "")
 AZURE_SEARCH_ENDPOINT = os.environ.get("AZURE_SEARCH_ENDPOINT", "")
 AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
 
+# Cost per 1K tokens (USD) — GPT-4o defaults
+COST_PER_1K_PROMPT = float(os.environ.get("COST_PER_1K_PROMPT_TOKENS", "0.0025"))
+COST_PER_1K_COMPLETION = float(os.environ.get("COST_PER_1K_COMPLETION_TOKENS", "0.01"))
+
 credential = None
 cosmos_client = None
 tenant_service = None
 apim_service = None
 storage_service = None
 search_service = None
+usage_service = None
 
 
 @app.before_serving
 async def setup_clients():
-    global credential, cosmos_client, tenant_service, apim_service, storage_service, search_service
+    global credential, cosmos_client, tenant_service, apim_service, storage_service, search_service, usage_service
 
     credential_kwargs = {}
     if AZURE_CLIENT_ID:
@@ -64,6 +70,11 @@ async def setup_clients():
     search_service = SearchService(
         search_endpoint=AZURE_SEARCH_ENDPOINT,
         credential=credential,
+    )
+
+    usage_service = UsageService(
+        cosmos_client=cosmos_client,
+        database_name=COSMOS_DATABASE,
     )
 
 
@@ -249,6 +260,89 @@ async def reindex():
 async def indexer_status():
     result = await search_service.get_indexer_status()
     return jsonify(result)
+
+
+# ── Usage analytics ──────────────────────────────────────────────────────────
+
+
+def _add_cost(data: dict) -> dict:
+    data["estimated_cost_usd"] = round(
+        (data.get("total_prompt_tokens", 0) or 0) / 1000 * COST_PER_1K_PROMPT
+        + (data.get("total_completion_tokens", 0) or 0) / 1000 * COST_PER_1K_COMPLETION,
+        4,
+    )
+    return data
+
+
+@app.route("/api/tenants/<tenant_id>/usage", methods=["GET"])
+async def tenant_usage(tenant_id: str):
+    days = request.args.get("days", "30")
+    try:
+        days = int(days)
+    except ValueError:
+        return jsonify({"error": "days must be an integer"}), 400
+
+    summary = await usage_service.get_tenant_usage(tenant_id, days)
+    _add_cost(summary)
+
+    daily = await usage_service.get_tenant_daily_usage(tenant_id, days)
+    for row in daily:
+        row["estimated_cost_usd"] = round(
+            (row.get("prompt_tokens", 0) or 0) / 1000 * COST_PER_1K_PROMPT
+            + (row.get("completion_tokens", 0) or 0) / 1000 * COST_PER_1K_COMPLETION,
+            4,
+        )
+
+    return jsonify({"summary": summary, "daily": daily})
+
+
+@app.route("/api/usage/overview", methods=["GET"])
+async def usage_overview():
+    days = request.args.get("days", "30")
+    try:
+        days = int(days)
+    except ValueError:
+        return jsonify({"error": "days must be an integer"}), 400
+
+    tenants = await usage_service.get_all_tenants_usage(days)
+    grand_total = {
+        "total_requests": 0,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    for t in tenants:
+        t["estimated_cost_usd"] = round(
+            (t.get("prompt_tokens", 0) or 0) / 1000 * COST_PER_1K_PROMPT
+            + (t.get("completion_tokens", 0) or 0) / 1000 * COST_PER_1K_COMPLETION,
+            4,
+        )
+        grand_total["total_requests"] += t.get("requests", 0) or 0
+        grand_total["total_prompt_tokens"] += t.get("prompt_tokens", 0) or 0
+        grand_total["total_completion_tokens"] += t.get("completion_tokens", 0) or 0
+        grand_total["total_tokens"] += t.get("total_tokens", 0) or 0
+
+    _add_cost(grand_total)
+
+    return jsonify({
+        "period_days": days,
+        "tenants": tenants,
+        "grand_total": grand_total,
+        "cost_rates": {
+            "prompt_per_1k": COST_PER_1K_PROMPT,
+            "completion_per_1k": COST_PER_1K_COMPLETION,
+            "currency": "USD",
+        },
+    })
+
+
+@app.route("/api/usage/rates", methods=["GET"])
+async def usage_rates():
+    return jsonify({
+        "prompt_per_1k": COST_PER_1K_PROMPT,
+        "completion_per_1k": COST_PER_1K_COMPLETION,
+        "currency": "USD",
+    })
 
 
 # ── Health + SPA ──────────────────────────────────────────────────────────────
