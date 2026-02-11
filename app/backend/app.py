@@ -210,11 +210,8 @@ async def _list_chatbot_configs() -> list[dict]:
     database = cosmos_client.get_database_client(COSMOS_DATABASE)
     container = database.get_container_client("chatbot-config")
     configs = []
-    async for item in container.query_items(
-        query="SELECT c.chatbotId, c.chatbotName FROM c",
-        enable_cross_partition_query=True,
-    ):
-        configs.append(item)
+    async for item in container.read_all_items():
+        configs.append({"chatbotId": item["chatbotId"], "chatbotName": item.get("chatbotName", "")})
     return configs
 
 
