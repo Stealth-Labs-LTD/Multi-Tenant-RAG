@@ -25,7 +25,9 @@ var prefix = 'rag-${environmentName}-${suffix}'
 var allTags = union(tags, {
   Environment: environmentName
   Application: 'multi-tenant-rag'
-  Owner: 'Stealth Labs'
+  // Stealth Labs Azure policy: Owner is a @stealthlabs.uk email, or 'stealthlabs' for a company-owned app.
+  Owner: 'stealthlabs'
+  Tier: 'open-source'
 })
 
 // Resource Group
